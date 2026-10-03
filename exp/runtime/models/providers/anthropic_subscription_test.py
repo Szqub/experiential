@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,10 @@ from exp.runtime.models.providers.anthropic_subscription import (
     exchange_anthropic_code,
     tokens_from_anthropic_response,
 )
-from exp.runtime.models.providers.subscription_tokens import StoredSubscriptionTokenSource
+from exp.runtime.models.providers.subscription_tokens import (
+    StoredSubscriptionTokenSource,
+    SubscriptionSignInError,
+)
 
 _NOW_MS = 1_800_000_000_000
 _APP = AnthropicOAuthApp(
@@ -191,6 +195,32 @@ class TestGrants:
             )
 
 
+@dataclass
+class _DispatchTokens:
+    """Track credential access with a controllable sign-in failure.
+
+    Attributes:
+        fail: Whether credential access raises a sign-in error.
+        calls: Number of attempts to obtain a bearer, initially zero.
+        connection_id: Synthetic plan connection identity.
+    """
+
+    fail: bool
+    calls: int = 0
+    connection_id: str = "claude-plan"
+
+    def current(self) -> StoredOAuthTokens:
+        """Return a distinct synthetic bearer for each dispatch or fail closed."""
+        self.calls += 1
+        if self.fail:
+            raise SubscriptionSignInError("synthetic sign-in failure")
+        return StoredOAuthTokens(
+            access_token=f"dispatch-{self.calls}",
+            refresh_token="synthetic-refresh",
+            expires_at_ms=_NOW_MS * 2,
+        )
+
+
 class TestClient:
     """The client sends the operator app's headers and a bearer minted per dispatch."""
 
@@ -239,3 +269,26 @@ class TestClient:
         assert client.sign_gateway_dispatch(url="https://x", body="{}") == {
             "Authorization": "Bearer plan-access"
         }
+
+    @pytest.mark.parametrize("fail", [False, True])
+    def test_wire_profile_defers_token_access_until_dispatch(self, fail: bool) -> None:
+        """Admission never mints a bearer, even when the stored sign-in is unusable."""
+        tokens = _DispatchTokens(fail=fail)
+        client = AnthropicSubscriptionClient(model=_snapshot(), app=_APP, tokens=tokens)
+
+        profile = client.gateway_wire_profile()
+
+        assert tokens.calls == 0
+        assert profile.signs_request_body
+        assert "authorization" not in {name.lower() for name in profile.headers}
+        assert "x-api-key" not in profile.headers
+        if fail:
+            with pytest.raises(SubscriptionSignInError, match="synthetic sign-in failure"):
+                client.sign_gateway_dispatch(url=profile.url, body="{}")
+            assert tokens.calls == 1
+        else:
+            for attempt in (1, 2):
+                assert client.sign_gateway_dispatch(url=profile.url, body="{}") == {
+                    "Authorization": f"Bearer dispatch-{attempt}"
+                }
+                assert tokens.calls == attempt

@@ -382,6 +382,10 @@ class AnthropicSubscriptionClient(AnthropicClient):
         """Return the static headers plus a bearer minted now."""
         return {**self._static_headers(), **self.sign_gateway_dispatch(url="", body="")}
 
+    def _gateway_headers(self) -> dict[str, str]:
+        """Build a wire profile without reading or refreshing the plan's sign-in."""
+        return self._static_headers()
+
     def sign_gateway_dispatch(self, *, url: str, body: str) -> Mapping[str, str]:
         """Mint the bearer for one physical dispatch immediately before the provider POST.
 

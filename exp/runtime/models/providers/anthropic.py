@@ -244,7 +244,7 @@ class AnthropicClient(ProviderHttpClient):
             dialect="anthropic_messages",
             inference_geo=self._inference_geo,
             url=f"{self._base_url}/{self._request_path(self._completion_path())}",
-            headers=self._headers(),
+            headers=self._gateway_headers(),
             model_id=self._model.model_id,
             timeout_seconds=self._timeout_seconds,
             supports_temperature=self._supports_temperature,
@@ -258,6 +258,10 @@ class AnthropicClient(ProviderHttpClient):
             reasoning_wire_format="anthropic_adaptive",
             reasoning_effort=self._reasoning_effort,
         )
+
+    def _gateway_headers(self) -> dict[str, str]:
+        """Return admission-time headers, separate from per-dispatch credentials."""
+        return self._headers()
 
     def _completion_path(self) -> str:
         """Return the native Messages route."""
